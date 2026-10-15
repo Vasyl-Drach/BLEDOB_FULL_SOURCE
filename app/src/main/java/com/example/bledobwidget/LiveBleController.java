@@ -173,6 +173,13 @@ final class LiveBleController {
                 }
                 int level = FadeMath.level(fadeBrightnessFrom, fadeBrightnessTo,
                         now - fadeStartedAt);
+                // Rounding to whole percent creates repeated levels near darkness.
+                // Skip duplicate BLE packets, but keep the original 1.5 s clock.
+                if (level == lastFadeBrightness && now - fadeStartedAt < FadeMath.DURATION_MS) {
+                    lastFadeWriteAt = now;
+                    scheduleFadeStep(FadeMath.STEP_INTERVAL_MS);
+                    return;
+                }
                 inFlightKind = "fade_brightness";
                 inFlightValue = level;
                 payload = LedProtocol.brightness(level, protocol);
@@ -252,9 +259,10 @@ final class LiveBleController {
                 // Acknowledge each write before sending another BLE packet.
                 long earliest = lastFadeWriteAt + FadeMath.STEP_INTERVAL_MS;
                 long now = SystemClock.uptimeMillis();
-                long targetTime = Math.min(Math.max(now + 20, earliest),
-                        Math.max(now, fadeStartedAt + FadeMath.DURATION_MS));
-                scheduleFadeStep(Math.max(0, targetTime - now));
+                // Respect BLE write spacing even when the 1.5 s deadline has
+                // passed; otherwise the last packet can be sent in a burst.
+                long targetTime = Math.max(now + 10L, earliest);
+                scheduleFadeStep(targetTime - now);
             }
             return;
         }

@@ -170,11 +170,9 @@ public class BleCommandService extends Service {
         if (finished) return;
         if (nextStep != null) main.removeCallbacks(nextStep);
         long now = SystemClock.uptimeMillis();
-        long earliest = Math.max(now + 20L, lastBrightnessSentAt + FadeMath.STEP_INTERVAL_MS);
-        long deadline = fadeStart + FadeMath.DURATION_MS;
-        long nextAt = Math.min(earliest, Math.max(now, deadline));
+        long earliest = Math.max(now + 10L, lastBrightnessSentAt + FadeMath.STEP_INTERVAL_MS);
         nextStep = this::sendFadeStep;
-        main.postDelayed(nextStep, Math.max(0L, nextAt - now));
+        main.postDelayed(nextStep, earliest - now);
     }
 
     private void sendFadeStep() {
@@ -182,6 +180,13 @@ public class BleCommandService extends Service {
         long now = SystemClock.uptimeMillis();
         int level = FadeMath.level(targetOn ? 1 : savedBrightness,
                 targetOn ? savedBrightness : 1, now - fadeStart);
+        // Do not resend identical 1% steps when gamma interpolation rounds
+        // down to the same integer at the dark end of the curve.
+        if (level == lastBrightness && now - fadeStart < FadeMath.DURATION_MS) {
+            lastBrightnessSentAt = now;
+            scheduleNextStep();
+            return;
+        }
         lastBrightness = level;
         lastBrightnessSentAt = now;
         write(LedProtocol.brightness(level, protocol));
