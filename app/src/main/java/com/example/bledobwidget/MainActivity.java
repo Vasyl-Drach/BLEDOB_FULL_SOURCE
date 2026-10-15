@@ -40,7 +40,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Locale;
 
-/** BLEDOB Lights 2.0: an offline, dependency-free Lotus Lantern replacement. */
+/** Bingo LED 2.1: an offline, dependency-free Lotus Lantern replacement. */
 public class MainActivity extends Activity implements LiveBleController.Listener {
     private static final int PERMISSION_REQUEST = 42;
     private static final int BG = 0xff0b101a;
@@ -104,7 +104,7 @@ public class MainActivity extends Activity implements LiveBleController.Listener
         head.addView(icon, lp(dp(56), dp(56)));
         LinearLayout brand = column();
         brand.setPadding(dp(12), 0, 0, 0);
-        brand.addView(text("BLEDOB", 27, TEXT, true));
+        brand.addView(text("Bingo LED", 27, TEXT, true));
         brand.addView(text("LIGHT CONTROL", 11, ACCENT, true));
         head.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
         content.addView(head);
@@ -340,8 +340,7 @@ public class MainActivity extends Activity implements LiveBleController.Listener
     private void togglePower() {
         if (!ensurePermissions()) return;
         if (!hasDevice()) { onStatus("Сначала выбери контроллер внизу", false); return; }
-        boolean state = LedWidgetProvider.prefs(this).getBoolean("on", false);
-        live.setPower(!state);
+        live.setPower(!live.requestedPower());
     }
 
     private boolean hasDevice() { return !LedWidgetProvider.prefs(this).getString("address", "").isEmpty(); }
@@ -462,7 +461,7 @@ public class MainActivity extends Activity implements LiveBleController.Listener
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
         ShortcutInfo info = new ShortcutInfo.Builder(this, "bledob_power_v2")
                 .setShortLabel("Свет")
-                .setLongLabel("BLEDOB · вкл/выкл")
+                .setLongLabel("Bingo LED · вкл/выкл")
                 .setIcon(Icon.createWithBitmap(BitmapFactory.decodeResource(getResources(), R.drawable.widget_power)))
                 .setIntent(toggle)
                 .build();

@@ -19,7 +19,7 @@ public class ToggleActivity extends Activity {
                 return;
             }
             if (!LedWidgetProvider.hasConnectPermission(this)) {
-                Toast.makeText(this, "Открой BLEDOB Widget и разреши Bluetooth", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "Открой Bingo LED и разреши Bluetooth", Toast.LENGTH_LONG).show();
                 return;
             }
             Intent service = new Intent(this, BleCommandService.class);

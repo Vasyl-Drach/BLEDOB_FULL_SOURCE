@@ -15,6 +15,7 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 
 import java.util.UUID;
 
@@ -48,6 +49,21 @@ final class LiveBleController {
     private Integer pendingBrightness;
     private String inFlightKind;
     private int inFlightValue;
+
+    // A fade is a series of acknowledged, spaced-out BLE brightness writes.
+    private boolean fading;
+    private boolean fadeToOn;
+    private int fadePhase; // 0: initial ON, 1: brightness ramp, 2: final OFF
+    private int fadeBrightnessFrom;
+    private int fadeBrightnessTo;
+    private long fadeStartedAt;
+    private long lastFadeWriteAt;
+    private int lastFadeBrightness;
+    private int fadeEpoch;
+    private int lastConfirmedBrightness = -1;
+    private int inFlightFadeEpoch;
+    private Runnable nextFadeStep;
+
 
     LiveBleController(Context ctx, Listener listener) {
         context = ctx.getApplicationContext();
@@ -84,13 +100,32 @@ final class LiveBleController {
 
     void close() {
         main.removeCallbacksAndMessages(null);
+        fading = false;
+        lastConfirmedBrightness = -1;
         release();
     }
 
     boolean isReady() { return ready; }
 
+    /** Includes an in-progress fade, so a second tap can reverse direction. */
+    boolean requestedPower() { return fading ? fadeToOn : prefs().getBoolean("on", false); }
+
     void setPower(boolean on) {
-        pendingPower = on;
+        // A new tap replaces the old fade; stale BLE write callbacks are ignored.
+        ++fadeEpoch;
+        cancelNextFadeStep();
+        fading = true;
+        fadeToOn = on;
+        fadePhase = on ? 0 : 1;
+        // If a fade is reversed midway, start from the last confirmed level.
+        fadeBrightnessFrom = on ? 1 : (lastConfirmedBrightness > 0
+                ? lastConfirmedBrightness : FadeMath.clamp(prefs().getInt("brightness", 85)));
+        fadeBrightnessTo = on ? FadeMath.clamp(prefs().getInt("brightness", 85)) : 1;
+        fadeStartedAt = 0;
+        lastFadeBrightness = -1;
+        lastFadeWriteAt = 0;
+        pendingPower = null;
+        status(on ? "Плавное включение (1,5 с)…" : "Плавное выключение (1,5 с)…", true);
         requestPump();
     }
 
@@ -118,7 +153,33 @@ final class LiveBleController {
         if (!ready || writing || gatt == null || characteristic == null) return;
         final byte[] payload;
         final int protocol = prefs().getInt("protocol", 0);
-        if (pendingPower != null) {
+        if (fading) {
+            inFlightFadeEpoch = fadeEpoch;
+            if (fadePhase == 0) {
+                inFlightKind = "fade_power_on";
+                inFlightValue = 1;
+                payload = LedProtocol.power(true, protocol);
+            } else if (fadePhase == 2) {
+                inFlightKind = "fade_power_off";
+                inFlightValue = 0;
+                payload = LedProtocol.power(false, protocol);
+            } else {
+                long now = SystemClock.uptimeMillis();
+                if (fadeStartedAt == 0) fadeStartedAt = now;
+                long remaining = lastFadeWriteAt + FadeMath.STEP_INTERVAL_MS - now;
+                if (lastFadeWriteAt != 0 && remaining > 0) {
+                    scheduleFadeStep(remaining);
+                    return;
+                }
+                int level = FadeMath.level(fadeBrightnessFrom, fadeBrightnessTo,
+                        now - fadeStartedAt);
+                inFlightKind = "fade_brightness";
+                inFlightValue = level;
+                payload = LedProtocol.brightness(level, protocol);
+                lastFadeBrightness = level;
+                lastFadeWriteAt = now;
+            }
+        } else if (pendingPower != null) {
             boolean value = pendingPower;
             pendingPower = null;
             inFlightKind = "power";
@@ -168,17 +229,72 @@ final class LiveBleController {
             failWrite("Ошибка записи BLE: " + statusCode);
             return;
         }
+        if (inFlightKind != null && inFlightKind.startsWith("fade_")) {
+            if (!fading || inFlightFadeEpoch != fadeEpoch) { pump(); return; }
+            if ("fade_power_on".equals(inFlightKind)) {
+                fadePhase = 1;
+                fadeStartedAt = SystemClock.uptimeMillis();
+                lastFadeWriteAt = 0;
+                lastFadeBrightness = -1;
+                pump();
+                return;
+            }
+            if ("fade_power_off".equals(inFlightKind)) {
+                finishFade();
+                return;
+            }
+            lastConfirmedBrightness = lastFadeBrightness;
+            long elapsed = SystemClock.uptimeMillis() - fadeStartedAt;
+            if (elapsed >= FadeMath.DURATION_MS && lastFadeBrightness == fadeBrightnessTo) {
+                if (fadeToOn) finishFade();
+                else { fadePhase = 2; pump(); }
+            } else {
+                // Acknowledge each write before sending another BLE packet.
+                long earliest = lastFadeWriteAt + FadeMath.STEP_INTERVAL_MS;
+                long now = SystemClock.uptimeMillis();
+                long targetTime = Math.min(Math.max(now + 20, earliest),
+                        Math.max(now, fadeStartedAt + FadeMath.DURATION_MS));
+                scheduleFadeStep(Math.max(0, targetTime - now));
+            }
+            return;
+        }
         SharedPreferences.Editor edit = prefs().edit();
         if ("power".equals(inFlightKind)) edit.putBoolean("on", inFlightValue == 1);
         else if ("color".equals(inFlightKind)) edit.putInt("color", inFlightValue);
-        else if ("brightness".equals(inFlightKind)) edit.putInt("brightness", inFlightValue);
+        else if ("brightness".equals(inFlightKind)) {
+            edit.putInt("brightness", inFlightValue);
+            lastConfirmedBrightness = inFlightValue;
+        }
         edit.apply();
         LedWidgetProvider.render(context, null);
         listener.onApplied();
         pump();
     }
 
+    private void scheduleFadeStep(long delayMs) {
+        cancelNextFadeStep();
+        nextFadeStep = this::pump;
+        main.postDelayed(nextFadeStep, delayMs);
+    }
+
+    private void cancelNextFadeStep() {
+        if (nextFadeStep != null) main.removeCallbacks(nextFadeStep);
+        nextFadeStep = null;
+    }
+
+    private void finishFade() {
+        cancelNextFadeStep();
+        fading = false;
+        prefs().edit().putBoolean("on", fadeToOn).apply();
+        LedWidgetProvider.render(context, null);
+        listener.onApplied();
+        status("BLEDOB подключён", true);
+        pump();
+    }
+
     private void failWrite(String why) {
+        cancelNextFadeStep();
+        fading = false;
         clearWriteTimeout();
         writing = false;
         release();
@@ -191,6 +307,7 @@ final class LiveBleController {
     }
 
     private void release() {
+        cancelNextFadeStep();
         if (connectionTimeout != null) main.removeCallbacks(connectionTimeout);
         connectionTimeout = null;
         clearWriteTimeout();
@@ -217,6 +334,7 @@ final class LiveBleController {
                     } catch (Exception e) { release(); status("Ошибка обнаружения сервисов", false); }
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED || statusCode != BluetoothGatt.GATT_SUCCESS) {
                     release();
+                    fading = false;
                     status("Нет соединения · нажми «Подключить»", false);
                 }
             });
