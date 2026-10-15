@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launcher may still enforce its own minimum grid size. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="1dp"
+    android:minHeight="1dp"
+    android:targetCellWidth="1"
+    android:targetCellHeight="1"
+    android:initialLayout="@layout/widget"
+    android:resizeMode="none"
+    android:widgetCategory="home_screen"
+    android:updatePeriodMillis="0"
+    android:description="@string/widget_desc" />

@@ -1,0 +1,6 @@
+<resources>
+    <color name="widget_off">#30363D</color>
+    <color name="widget_on">#157A53</color>
+    <color name="widget_wait">#2B597A</color>
+    <color name="widget_error">#963D39</color>
+</resources>
